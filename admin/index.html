@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>문의함 관리</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+  <style>
+    :root {
+      --forest: #1f3329; --ink: #22302a; --ink-soft: #56655c; --mist: #eef2ee;
+      --moss: #3f6650; --line: #d2dbd3; --alert: #9b2c2c;
+    }
+    [hidden] { display: none !important; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--mist); color: var(--ink);
+      font: 16px/1.6 "Pretendard Variable", Pretendard, -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+      word-break: keep-all;
+    }
+    :focus-visible { outline: 3px solid var(--moss); outline-offset: 2px; }
+    .wrap { max-width: 720px; margin: 0 auto; padding: 24px 16px 64px; }
+    h1 { font-size: 20px; margin: 0 0 20px; color: var(--forest); }
+
+    .login { background: #fff; border-radius: 16px; padding: 28px 20px; display: grid; gap: 14px; margin-top: 12vh; }
+    .login label { font-weight: 600; }
+    input[type=password] {
+      font: inherit; font-size: 17px; width: 100%; padding: 14px; border: 1px solid var(--line); border-radius: 10px;
+    }
+    button {
+      font: inherit; font-weight: 600; border: 0; border-radius: 999px; cursor: pointer;
+      min-height: 48px; padding: 0 20px; background: var(--forest); color: #fff;
+    }
+    .msg { margin: 0; color: var(--alert); font-weight: 600; min-height: 1.6em; }
+
+    .bar { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 20px; }
+    .bar button { background: transparent; color: var(--ink-soft); border: 1px solid var(--line); min-height: 40px; }
+    .count { background: var(--forest); color: #fff; border-radius: 16px; padding: 20px; margin-bottom: 24px; }
+    .count strong { display: block; font-size: 44px; line-height: 1.1; }
+
+    .list { display: grid; gap: 12px; }
+    .card { background: #fff; border-radius: 16px; padding: 18px; border: 1px solid var(--line); }
+    .card.is-new { border-color: var(--moss); border-width: 2px; }
+    .meta { font-size: 14px; color: var(--ink-soft); }
+    .name { font-size: 18px; font-weight: 700; margin: 2px 0; }
+    .contact {
+      background: none; color: var(--moss); padding: 0; min-height: 32px; border-radius: 0;
+      text-decoration: underline; text-underline-offset: 3px; font-weight: 600;
+    }
+    .text { white-space: pre-wrap; margin: 10px 0 14px; }
+    .states { display: flex; gap: 8px; flex-wrap: wrap; }
+    .states button { background: var(--mist); color: var(--ink); flex: 1; min-width: 88px; }
+    .states button[aria-pressed=true] { background: var(--forest); color: #fff; }
+    .empty { color: var(--ink-soft); text-align: center; padding: 40px 0; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <form class="login" id="login">
+      <h1>문의함 관리</h1>
+      <label for="pw">관리자 비밀번호</label>
+      <input id="pw" type="password" autocomplete="current-password" required>
+      <button type="submit">들어가기</button>
+      <p class="msg" id="login-msg" role="alert"></p>
+    </form>
+
+    <main id="board" hidden>
+      <div class="bar">
+        <h1>문의함</h1>
+        <button type="button" id="logout">나가기</button>
+      </div>
+      <div class="count"><span>새 문의</span><strong id="new-count">0</strong></div>
+      <p class="msg" id="board-msg" role="status"></p>
+      <div class="list" id="list"></div>
+    </main>
+  </div>
+
+  <script>
+    (() => {
+      const KEY = 'admin-pw';
+      const STATES = ['새 문의', '연락함', '완료'];
+      const $ = (id) => document.getElementById(id);
+      const getPw = () => { try { return sessionStorage.getItem(KEY) || ''; } catch { return ''; } };
+      const setPw = (v) => { try { v ? sessionStorage.setItem(KEY, v) : sessionStorage.removeItem(KEY); } catch {} };
+      let memPw = getPw();
+
+      const call = (method, body) => fetch('/api/admin', {
+        method,
+        headers: { 'x-admin-password': memPw, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+
+      const showLogin = (text) => {
+        memPw = ''; setPw('');
+        $('board').hidden = true; $('login').hidden = false;
+        $('login-msg').textContent = text || '';
+        $('pw').value = ''; $('pw').focus();
+      };
+
+      const fmt = (iso) => {
+        const d = new Date(iso);
+        return d.toLocaleString('ko-KR', { month: 'long', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit' });
+      };
+
+      const copy = async (btn, text) => {
+        try { await navigator.clipboard.writeText(text); btn.textContent = text + ' (복사됨)'; }
+        catch {
+          const r = document.createRange(); r.selectNodeContents(btn);
+          const s = getSelection(); s.removeAllRanges(); s.addRange(r);
+        }
+        setTimeout(() => { btn.textContent = text; }, 1500);
+      };
+
+      const render = (rows) => {
+        const list = $('list');
+        list.replaceChildren();
+        $('new-count').textContent = rows.filter((r) => r.status === '새 문의').length;
+        if (!rows.length) {
+          const p = document.createElement('p'); p.className = 'empty'; p.textContent = '아직 들어온 문의가 없어요.';
+          list.append(p); return;
+        }
+        for (const row of rows) {
+          const card = document.createElement('article');
+          card.className = 'card' + (row.status === '새 문의' ? ' is-new' : '');
+          const meta = document.createElement('div'); meta.className = 'meta'; meta.textContent = fmt(row.created_at);
+          const name = document.createElement('div'); name.className = 'name'; name.textContent = row.name;
+          const c = document.createElement('button'); c.type = 'button'; c.className = 'contact'; c.textContent = row.contact;
+          c.addEventListener('click', () => copy(c, row.contact));
+          const text = document.createElement('p'); text.className = 'text'; text.textContent = row.message || '(내용 없음)';
+          const states = document.createElement('div'); states.className = 'states'; states.setAttribute('role', 'group'); states.setAttribute('aria-label', '처리 상태');
+          for (const s of STATES) {
+            const b = document.createElement('button'); b.type = 'button'; b.textContent = s;
+            b.setAttribute('aria-pressed', String(row.status === s));
+            b.addEventListener('click', () => change(row.id, s));
+            states.append(b);
+          }
+          card.append(meta, name, c, text, states);
+          list.append(card);
+        }
+      };
+
+      const load = async () => {
+        $('board-msg').textContent = '';
+        const r = await call('GET');
+        const j = await r.json().catch(() => ({}));
+        if (r.status === 401) return showLogin('비밀번호가 맞지 않아요.');
+        if (!r.ok) { $('login').hidden = true; $('board').hidden = false; $('board-msg').textContent = j.error || '불러오지 못했어요.'; return; }
+        setPw(memPw);
+        $('login').hidden = true; $('board').hidden = false;
+        render(j.rows || []);
+      };
+
+      const change = async (id, status) => {
+        const r = await call('PATCH', { id, status });
+        const j = await r.json().catch(() => ({}));
+        if (r.status === 401) return showLogin('비밀번호가 맞지 않아요.');
+        if (!r.ok) { $('board-msg').textContent = j.error || '바꾸지 못했어요.'; return; }
+        load();
+      };
+
+      $('login').addEventListener('submit', (e) => {
+        e.preventDefault();
+        memPw = $('pw').value;
+        $('login-msg').textContent = '';
+        load().catch(() => showLogin('연결하지 못했어요. 잠시 뒤 다시 시도해 주세요.'));
+      });
+      $('logout').addEventListener('click', () => showLogin(''));
+
+      if (memPw) load().catch(() => showLogin('')); else $('pw').focus();
+    })();
+  </script>
+</body>
+</html>
